@@ -86,6 +86,9 @@ secrets/
 # Dependencias descargadas por buildspec.json (OBS, Qt, etc.)
 /.deps/
 
+# Flatpak (flatpak-builder y artefactos locales)
+/.flatpak-builder/
+
 # Artefactos de Visual Studio
 *.iobj
 *.ipdb

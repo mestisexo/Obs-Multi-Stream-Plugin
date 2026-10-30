@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="addon">
+  <id>com.obsproject.Studio.Plugin.MultiStreamMS</id>
+  <extends>com.obsproject.Studio</extends>
+  <name>Multi-Stream MS</name>
+  <summary>Send the main stream to additional RTMP destinations</summary>
+  <description>
+    <p>Multi-Stream MS lets OBS Studio send the main stream to additional RTMP destinations while reusing the main stream's encoders, so the video is not encoded twice.</p>
+    <p>Destinations only run while the main stream is live and stop automatically when it ends.</p>
+  </description>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+  <url type="homepage">https://github.com/mestisexo/Obs-Multistream-Plugin</url>
+  <developer id="com.github.mestisexo">
+    <name>Multi-Stream MS contributors</name>
+  </developer>
+  <releases>
+    <release version="0.1.0" date="2026-10-29"/>
+  </releases>
+</component>

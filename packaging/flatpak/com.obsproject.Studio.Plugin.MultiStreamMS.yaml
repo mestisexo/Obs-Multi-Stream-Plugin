@@ -1,0 +1,36 @@
+id: com.obsproject.Studio.Plugin.MultiStreamMS
+branch: stable
+runtime: com.obsproject.Studio
+runtime-version: stable
+sdk: org.freedesktop.Sdk//26.08
+build-extension: true
+separate-locales: false
+appstream-compose: false
+
+build-options:
+  prefix: /app/plugins/MultiStreamMS
+
+modules:
+  - name: multi-stream-ms
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - -DCMAKE_INSTALL_PREFIX=/app/plugins/MultiStreamMS
+      - -DCMAKE_INSTALL_LIBDIR=lib
+      - -DCMAKE_PREFIX_PATH=/app
+      - -DENABLE_FRONTEND_API=ON
+      - -DENABLE_QT=ON
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .deps
+          - .flatpak-builder
+          - build
+          - build-*
+          - build_*
+          - cmake-build-*
+    post-install:
+      - install -Dm644 ../packaging/flatpak/com.obsproject.Studio.Plugin.MultiStreamMS.metainfo.xml "${FLATPAK_DEST}/share/metainfo/com.obsproject.Studio.Plugin.MultiStreamMS.metainfo.xml"

@@ -34,13 +34,17 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
 #include <QUuid>
 #include <QVBoxLayout>
 
+#include <mutex>
+#include <unordered_set>
 #include <utility>
 
-/* Context handed to libobs signal callbacks. Lives from output start until
- * releaseRuntime(), which disconnects the signals before freeing it. */
+/* Context handed to libobs signal callbacks. It stays registered while the
+ * output is running and is unregistered by releaseRuntime(), which also
+ * disconnects the signals before retiring it. */
 struct OutputRunCtx {
 	MultiStreamDock *dock;
 	QString id;
@@ -51,16 +55,54 @@ namespace {
 
 const char *kConfigFile = "multi-stream-ms.json";
 
+/* libobs signal callbacks run on output threads and receive a raw
+ * OutputRunCtx pointer. signal_handler_disconnect() does not wait for a
+ * callback that is already running, so the context cannot be freed right
+ * after disconnecting. postSignal() only touches the context while holding
+ * g_ctxMutex, and releaseRuntime() removes it from the registry under the
+ * same mutex before deleting it. */
+std::mutex g_ctxMutex;
+std::unordered_set<OutputRunCtx *> g_liveCtx;
+
+void registerRunCtx(OutputRunCtx *ctx)
+{
+	std::lock_guard<std::mutex> lock(g_ctxMutex);
+	g_liveCtx.insert(ctx);
+}
+
+void unregisterAndDeleteRunCtx(OutputRunCtx *ctx)
+{
+	if (!ctx)
+		return;
+	{
+		std::lock_guard<std::mutex> lock(g_ctxMutex);
+		g_liveCtx.erase(ctx);
+	}
+	/* No callback can be inside the critical section anymore, and future
+	 * callbacks will not find the context in the registry. */
+	delete ctx;
+}
+
 /* ---- libobs signal callbacks (called on libobs threads, NOT the UI thread).
  * They only copy plain values and queue the real work onto the UI thread. */
 
 void postSignal(void *data, OutputSignal sig, int code, const char *err)
 {
 	auto *ctx = static_cast<OutputRunCtx *>(data);
-	MultiStreamDock *dock = ctx->dock;
-	const QString id = ctx->id;
-	const quint64 runId = ctx->runId;
-	const QString error = err ? QString::fromUtf8(err) : QString();
+	MultiStreamDock *dock;
+	QString id;
+	quint64 runId;
+	QString error;
+
+	{
+		std::lock_guard<std::mutex> lock(g_ctxMutex);
+		if (g_liveCtx.find(ctx) == g_liveCtx.end())
+			return;
+		dock = ctx->dock;
+		id = ctx->id;
+		runId = ctx->runId;
+		error = err ? QString::fromUtf8(err) : QString();
+	}
 
 	QMetaObject::invokeMethod(
 		dock, [dock, id, runId, sig, code, error]() { dock->handleOutputSignal(id, runId, sig, code, error); },
@@ -238,6 +280,7 @@ void MultiStreamDock::loadConfig()
 
 	obs_data_array_t *arr = obs_data_get_array(root, "destinations");
 	const size_t count = arr ? obs_data_array_count(arr) : 0;
+	QSet<QString> usedIds;
 	for (size_t i = 0; i < count; i++) {
 		obs_data_t *item = obs_data_array_item(arr, i);
 		auto d = std::make_unique<Destination>();
@@ -247,10 +290,13 @@ void MultiStreamDock::loadConfig()
 		d->key = QString::fromUtf8(obs_data_get_string(item, "streamKey"));
 		obs_data_release(item);
 
-		if (d->id.isEmpty())
-			d->id = QUuid::createUuid().toString(QUuid::WithoutBraces);
 		if (d->server.isEmpty())
 			continue;
+		/* Ids double as internal output names, so they must be unique
+		 * even if the JSON was edited by hand. */
+		if (d->id.isEmpty() || usedIds.contains(d->id))
+			d->id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		usedIds.insert(d->id);
 		dests_.push_back(std::move(d));
 	}
 	if (arr)
@@ -511,7 +557,11 @@ void MultiStreamDock::startDestination(Destination &d)
 		return;
 	}
 
-	const QByteArray name = d.name.toUtf8();
+	/* libobs requires unique output/service names. The display name is not
+	 * guaranteed to be unique (and may contain any character), so the
+	 * internal name is built from the id and the run counter. */
+	d.runId = ++runCounter_;
+	const QByteArray name = QStringLiteral("%1-%2").arg(d.id).arg(d.runId).toUtf8();
 
 	obs_data_t *svcSettings = obs_data_create();
 	obs_data_set_string(svcSettings, "server", d.server.toUtf8().constData());
@@ -540,8 +590,8 @@ void MultiStreamDock::startDestination(Destination &d)
 
 	d.output = output;
 	d.service = service;
-	d.runId = ++runCounter_;
 	d.ctx = new OutputRunCtx{this, d.id, d.runId};
+	registerRunCtx(d.ctx);
 	d.lastError.clear();
 
 	signal_handler_t *sh = obs_output_get_signal_handler(output);
@@ -597,9 +647,10 @@ void MultiStreamDock::releaseRuntime(Destination &d, bool force)
 		obs_service_release(d.service);
 		d.service = nullptr;
 	}
-	delete d.ctx;
+	OutputRunCtx *ctx = d.ctx;
 	d.ctx = nullptr;
 	d.runId = 0;
+	unregisterAndDeleteRunCtx(ctx);
 }
 
 void MultiStreamDock::handleOutputSignal(const QString &id, quint64 runId, OutputSignal sig, int code,
