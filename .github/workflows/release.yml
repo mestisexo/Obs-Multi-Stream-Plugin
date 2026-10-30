@@ -1,0 +1,115 @@
+name: Release
+
+# Se ejecuta al subir un tag que empiece por "v" (por ejemplo v0.1.0)
+# o a mano desde la pestaña Actions ("Run workflow") para hacer pruebas
+# sin publicar nada.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (zip)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # El preset windows-ci-x64 usa Visual Studio 2022 y descarga OBS,
+      # obs-deps y Qt6 según buildspec.json en la primera configuración.
+      - name: Configurar
+        run: cmake --preset windows-ci-x64
+
+      - name: Compilar
+        run: cmake --build --preset windows-ci-x64 --config RelWithDebInfo
+
+      - name: Instalar en carpeta temporal
+        run: cmake --install build_x64 --config RelWithDebInfo --prefix "${{ github.workspace }}\dist"
+
+      - name: Crear zip
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dev" }
+          $zip = "multi-stream-ms-$tag-windows-x64.zip"
+          Compress-Archive -Path dist\multi-stream-ms -DestinationPath $zip
+          "ZIP_NAME=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-ChildItem dist\multi-stream-ms -Recurse | Select-Object -ExpandProperty FullName
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+
+  flatpak:
+    name: Linux (Flatpak)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu 24.04 restringe los user namespaces que necesita bubblewrap,
+      # y flatpak-builder no puede compilar sin ellos.
+      - name: Permitir user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # El PPA de flatpak trae una versión más nueva que la de Ubuntu,
+      # necesaria para runtimes recientes como el 26.08.
+      - name: Instalar flatpak y flatpak-builder
+        run: |
+          sudo add-apt-repository -y ppa:flatpak/stable
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak --version
+          flatpak-builder --version
+
+      - name: Instalar OBS y el SDK
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub com.obsproject.Studio org.freedesktop.Sdk//26.08
+
+      # build.sh compila e instala la extensión y deja el repositorio
+      # local en build-flatpak/repo, que se usa para crear el bundle.
+      - name: Compilar la extensión
+        run: ./packaging/flatpak/build.sh --verbose
+
+      - name: Crear el archivo .flatpak
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="dev"; fi
+          FILE="multi-stream-ms-${TAG}.flatpak"
+          flatpak build-bundle --runtime build-flatpak/repo "$FILE" com.obsproject.Studio.Plugin.MultiStreamMS stable
+          echo "FLATPAK_NAME=$FILE" >> "$GITHUB_ENV"
+          ls -lh "$FILE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: ${{ env.FLATPAK_NAME }}
+          if-no-files-found: error
+
+  release:
+    name: Publicar Release
+    # Solo con tags; las ejecuciones manuales no publican nada.
+    if: github.ref_type == 'tag'
+    needs: [windows, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Crear la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh artifacts
+          gh release create "${{ github.ref_name }}" artifacts/* \
+            --repo "${{ github.repository }}" \
+            --title "Multi-Stream MS ${{ github.ref_name }}" \
+            --generate-notes
