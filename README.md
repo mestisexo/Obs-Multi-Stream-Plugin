@@ -6,12 +6,12 @@ First oficial version published!
 
 ### Windows
 
-1. Download the source code (.zip)
+1. Download the source code (.zip) from releases
 2. Extract the (.zip) "multi-stream-ms folder" into
 ```bash
 C:\ProgramData\obs-studio\plugins\
 ```
-3. Verify the path, must be
+3. Verify the correct path, must be
 ```bash
 C:\ProgramData\obs-studio\plugins\multi-stream-ms\bin\64bit\multi-stream-ms.dll
 ```
@@ -20,9 +20,11 @@ C:\ProgramData\obs-studio\plugins\multi-stream-ms\bin\64bit\multi-stream-ms.dll
 ### Linux
 
 1. Require Flatpak Obs
+```bash
 flatpak install flathub com.obsproject.Studio
-2. Download the source code (.flatpak)
-3. Open the terminal (into the download path) and run
+```
+2. Download the source code (.flatpak) from releases
+3. Open the terminal (into the folder what contains the flatpak file) and run
 ```bash
 flatpak install --user ./multi-stream-ms-0.1.0.flatpak
 ```
